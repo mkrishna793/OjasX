@@ -387,12 +387,3 @@ python tests/test_jit.py
 Created by **mkrishna793** — with the conviction that AI compute is a human right, not a corporate privilege.
 
 ---
-
-<p align="center">
-  <br/>
-  <strong>⚡ The energy belongs to everyone. ⚡</strong>
-  <br/><br/>
-  <em>Built with the vision that no corporation should control who gets to build AI.</em>
-  <br/><br/>
-  <sub>OjasX V1.0.0 — April 2026</sub>
-</p>
