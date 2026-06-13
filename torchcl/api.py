@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 import torch
 
+import weakref
 from torchcl.ops.engine import get_engine
 from torchcl.runtime.memory import CLBuffer, get_buffer_pool
 from torchcl.runtime.context import synchronize as _sync
@@ -27,8 +28,12 @@ from torchcl.runtime.context import synchronize as _sync
 # Since we can't actually allocate on a real custom device without C++,
 # we use a shadow-tensor approach: the "real" data lives in OpenCL buffers,
 # and we keep a CPU-side tensor as a handle/placeholder.
-_opencl_buffers: dict[int, CLBuffer] = {}
+_opencl_buffers = weakref.WeakValueDictionary()
 _tensor_id_counter = 0
+
+
+def _cleanup_buffer(cl_buf: CLBuffer) -> None:
+    get_buffer_pool().free(cl_buf)
 
 
 def _next_id() -> int:
@@ -70,6 +75,7 @@ def _wrap_output(cl_buf: CLBuffer, shape: tuple, dtype: torch.dtype = torch.floa
     """Wrap an OpenCL buffer as a TorchCL tensor handle."""
     handle, tid = _make_handle(shape, dtype)
     _opencl_buffers[tid] = cl_buf
+    weakref.finalize(handle, _cleanup_buffer, cl_buf)
     return handle
 
 
@@ -335,8 +341,33 @@ def matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         raise ValueError(f"matmul dimension mismatch: {a_shape} @ {b_shape}")
 
     out_shape = (M, N)
-    out_buf = engine.allocate_output(out_shape)
-    engine.run_matmul(_get_buf(a), _get_buf(b), out_buf, M, N, K)
+
+    from torchcl.liquid.dispatch import get_dispatcher
+    from torchcl.liquid.precision import AdaptivePrecision
+
+    dispatcher = get_dispatcher()
+    config = dispatcher.dispatch("matmul", a)
+
+    if config.precision == "half":
+        ap = AdaptivePrecision()
+        a_fp16 = ap.pack_to_fp16(_get_buf(a), M * K)
+        b_fp16 = ap.pack_to_fp16(_get_buf(b), K * N)
+        out_fp16 = get_buffer_pool().allocate(M * N * 2, np.dtype(np.float16), out_shape)
+        engine.run_matmul_fp16(
+            a_fp16, b_fp16, out_fp16, M, N, K,
+            use_tiled=(config.strategy == "tiled")
+        )
+        out_buf = ap.unpack_from_fp16(out_fp16, M * N)
+        get_buffer_pool().free(a_fp16)
+        get_buffer_pool().free(b_fp16)
+        get_buffer_pool().free(out_fp16)
+    else:
+        out_buf = engine.allocate_output(out_shape)
+        engine.run_matmul(
+            _get_buf(a), _get_buf(b), out_buf, M, N, K,
+            use_tiled=(config.strategy == "tiled")
+        )
+
     return _wrap_output(out_buf, out_shape)
 
 
@@ -360,9 +391,9 @@ def sum_(a: torch.Tensor) -> torch.Tensor:
     engine = get_engine()
     shape = _get_shape(a)
     n = int(np.prod(shape))
-    out_buf = engine.allocate_output((1,))
+    out_buf = engine.allocate_output(())
     engine.run_reduction("sum_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, (1,))
+    return _wrap_output(out_buf, ())
 
 
 def mean(a: torch.Tensor) -> torch.Tensor:
@@ -371,12 +402,12 @@ def mean(a: torch.Tensor) -> torch.Tensor:
     shape = _get_shape(a)
     n = int(np.prod(shape))
     # Sum then divide
-    sum_buf = engine.allocate_output((1,))
+    sum_buf = engine.allocate_output(())
     engine.run_reduction("sum_f32", _get_buf(a), sum_buf, n)
-    out_buf = engine.allocate_output((1,))
+    out_buf = engine.allocate_output(())
     engine.run_elementwise_scalar("mul_scalar_f32", sum_buf, 1.0 / n, out_buf, 1)
     engine.free_buffer(sum_buf)
-    return _wrap_output(out_buf, (1,))
+    return _wrap_output(out_buf, ())
 
 
 def max_(a: torch.Tensor) -> torch.Tensor:
@@ -384,9 +415,9 @@ def max_(a: torch.Tensor) -> torch.Tensor:
     engine = get_engine()
     shape = _get_shape(a)
     n = int(np.prod(shape))
-    out_buf = engine.allocate_output((1,))
+    out_buf = engine.allocate_output(())
     engine.run_reduction("max_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, (1,))
+    return _wrap_output(out_buf, ())
 
 
 def min_(a: torch.Tensor) -> torch.Tensor:
@@ -394,6 +425,145 @@ def min_(a: torch.Tensor) -> torch.Tensor:
     engine = get_engine()
     shape = _get_shape(a)
     n = int(np.prod(shape))
-    out_buf = engine.allocate_output((1,))
+    out_buf = engine.allocate_output(())
     engine.run_reduction("min_f32", _get_buf(a), out_buf, n)
+    return _wrap_output(out_buf, ())
+
+
+# ── Normalization operations ─────────────────────────────────────────
+
+def layer_norm(
+    a: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    normalized_shape: int,
+    eps: float = 1e-5,
+) -> torch.Tensor:
+    """Layer normalization on OpenCL."""
+    engine = get_engine()
+    shape = _get_shape(a)
+    N = normalized_shape
+    M = int(np.prod(shape)) // N
+
+    out_buf = engine.allocate_output(shape)
+    mean_buf = engine.allocate_output((M,))
+    rstd_buf = engine.allocate_output((M,))
+
+    engine.run_layer_norm(
+        _get_buf(a), _get_buf(weight), _get_buf(bias),
+        out_buf, mean_buf, rstd_buf,
+        M, N, eps,
+    )
+    return _wrap_output(out_buf, shape)
+
+
+def rms_norm(
+    a: torch.Tensor,
+    weight: torch.Tensor,
+    normalized_shape: int,
+    eps: float = 1e-5,
+) -> torch.Tensor:
+    """RMS normalization on OpenCL (LLaMA-style)."""
+    engine = get_engine()
+    shape = _get_shape(a)
+    N = normalized_shape
+    M = int(np.prod(shape)) // N
+
+    out_buf = engine.allocate_output(shape)
+    rrms_buf = engine.allocate_output((M,))
+
+    engine.run_rms_norm(
+        _get_buf(a), _get_buf(weight),
+        out_buf, rrms_buf,
+        M, N, eps,
+    )
+    return _wrap_output(out_buf, shape)
+
+
+# ── Loss functions ───────────────────────────────────────────────────
+
+def cross_entropy_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+) -> torch.Tensor:
+    """Cross-entropy loss on OpenCL (mean reduction).
+
+    Args:
+        logits:  [batch, num_classes] — raw logits (not softmax'd)
+        targets: [batch] — class indices (as float for OpenCL transfer)
+    Returns:
+        Scalar loss tensor.
+    """
+    engine = get_engine()
+    logits_shape = _get_shape(logits)
+    batch_size = logits_shape[0]
+    C = logits_shape[1]
+
+    loss_per_sample_buf = engine.allocate_output((batch_size,))
+    log_softmax_buf = engine.allocate_output(logits_shape)
+
+    engine.run_cross_entropy_forward(
+        _get_buf(logits), _get_buf(targets),
+        loss_per_sample_buf, log_softmax_buf,
+        batch_size, C,
+    )
+
+    # Mean reduction
+    sum_buf = engine.allocate_output((1,))
+    engine.run_reduction("sum_f32", loss_per_sample_buf, sum_buf, batch_size)
+    out_buf = engine.allocate_output((1,))
+    engine.run_elementwise_scalar("mul_scalar_f32", sum_buf, 1.0 / batch_size, out_buf, 1)
+    engine.free_buffer(sum_buf)
+    engine.free_buffer(loss_per_sample_buf)
+
     return _wrap_output(out_buf, (1,))
+
+
+def mse_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Mean squared error loss on OpenCL."""
+    engine = get_engine()
+    shape = _get_shape(pred)
+    n = int(np.prod(shape))
+
+    per_elem_buf = engine.allocate_output(shape)
+    engine.run_mse_forward(_get_buf(pred), _get_buf(target), per_elem_buf, n)
+
+    # Mean reduction
+    sum_buf = engine.allocate_output((1,))
+    engine.run_reduction("sum_f32", per_elem_buf, sum_buf, n)
+    out_buf = engine.allocate_output((1,))
+    engine.run_elementwise_scalar("mul_scalar_f32", sum_buf, 1.0 / n, out_buf, 1)
+    engine.free_buffer(sum_buf)
+    engine.free_buffer(per_elem_buf)
+
+    return _wrap_output(out_buf, (1,))
+
+
+def fused_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    scale: float | None = None,
+) -> torch.Tensor:
+    """Compute fused scaled dot-product attention on OpenCL.
+
+    Q: [B, H, M, D]
+    K: [B, H, N, D]
+    V: [B, H, N, D]
+    """
+    engine = get_engine()
+    q_shape = _get_shape(q)
+    k_shape = _get_shape(k)
+
+    B, H, M, D = q_shape
+    _, _, N, _ = k_shape
+
+    if scale is None:
+        scale = D ** -0.5
+
+    out_buf = engine.allocate_output((B, H, M, D))
+    engine.run_fused_attention(
+        _get_buf(q), _get_buf(k), _get_buf(v), out_buf,
+        B, H, M, N, D, scale
+    )
+    return _wrap_output(out_buf, (B, H, M, D))

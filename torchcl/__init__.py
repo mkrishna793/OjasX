@@ -23,8 +23,8 @@ Usage:
     result = torchcl.to_cpu(z)
 """
 
-__version__ = "0.1.0"
-__author__ = "TorchCL Contributors"
+__version__ = "0.2.0"
+__author__ = "OjasX Contributors"
 
 # Initialize OpenCL runtime on import
 from torchcl.runtime.context import (
@@ -71,19 +71,27 @@ from torchcl.api import (
     mean,
     max_,
     min_,
+    # Normalization
+    layer_norm,
+    rms_norm,
+    # Loss functions
+    cross_entropy_loss,
+    mse_loss,
+    fused_attention,
 )
 
 # Auto-initialize on import
 try:
     init_opencl()
+    import torchcl.runtime.privateuse1
     _info = get_device_info()
-    print(f"[TorchCL] OK - Initialized on: {_info['name']}")
-    print(f"[TorchCL]   OpenCL {_info['version']} | "
+    print(f"[OjasX] OK - Initialized on: {_info['name']}")
+    print(f"[OjasX]   OpenCL {_info['version']} | "
           f"{_info['max_compute_units']} CUs | "
           f"{_info['global_mem_size_mb']} MB")
 except Exception as e:
-    print(f"[TorchCL] FAILED - Could not initialize OpenCL: {e}")
-    print("[TorchCL]   Falling back to CPU-only mode.")
+    print(f"[OjasX] FAILED - Could not initialize OpenCL: {e}")
+    print("[OjasX]   Falling back to CPU-only mode.")
 
 __all__ = [
     # Info
@@ -95,10 +103,7 @@ __all__ = [
     "to_cpu",
     "is_opencl_tensor",
     # Creation
-    "zeros",
-    "ones",
-    "full",
-    "randn",
+    "zeros", "ones", "full", "randn",
     # Arithmetic
     "add", "sub", "mul", "div", "neg", "abs_", "exp", "log", "sqrt",
     # Activations
@@ -107,4 +112,8 @@ __all__ = [
     "matmul", "transpose",
     # Reductions
     "sum_", "mean", "max_", "min_",
+    # Normalization
+    "layer_norm", "rms_norm",
+    # Loss
+    "cross_entropy_loss", "mse_loss", "fused_attention",
 ]

@@ -103,3 +103,69 @@ __kernel void transpose_f32(__global const float* A,
         B[col * M + row] = A[row * N + col];
     }
 }
+
+// ── FP16 matrix multiplication kernels ───────────────────────────────
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void matmul_naive_fp16(
+    __global const half* A,
+    __global const half* B,
+    __global half* C,
+    const int M,
+    const int N,
+    const int K
+) {
+    int row = get_global_id(0);
+    int col = get_global_id(1);
+
+    if (row < M && col < N) {
+        half sum = 0.0f;
+        for (int k = 0; k < K; k++) {
+            sum += A[row * K + k] * B[k * N + col];
+        }
+        C[row * N + col] = sum;
+    }
+}
+
+__kernel void matmul_tiled_fp16(
+    __global const half* A,
+    __global const half* B,
+    __global half* C,
+    const int M,
+    const int N,
+    const int K
+) {
+    __local half tileA[TILE_SIZE][TILE_SIZE];
+    __local half tileB[TILE_SIZE][TILE_SIZE];
+
+    int row = get_global_id(0);
+    int col = get_global_id(1);
+    int localRow = get_local_id(0);
+    int localCol = get_local_id(1);
+
+    half sum = 0.0f;
+    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
+
+    for (int t = 0; t < numTiles; t++) {
+        int tiledK_A = t * TILE_SIZE + localCol;
+        int tiledK_B = t * TILE_SIZE + localRow;
+
+        tileA[localRow][localCol] = (row < M && tiledK_A < K)
+            ? A[row * K + tiledK_A] : 0.0f;
+
+        tileB[localRow][localCol] = (tiledK_B < K && col < N)
+            ? B[tiledK_B * N + col] : 0.0f;
+
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for (int k = 0; k < TILE_SIZE; k++) {
+            sum += tileA[localRow][k] * tileB[k][localCol];
+        }
+
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (row < M && col < N) {
+        C[row * N + col] = sum;
+    }
+}

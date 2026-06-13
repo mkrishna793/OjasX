@@ -8,6 +8,7 @@ The buffer pool reuses freed buffers to avoid expensive clCreateBuffer calls.
 from __future__ import annotations
 
 import threading
+import weakref
 from collections import defaultdict
 
 import numpy as np
@@ -19,7 +20,7 @@ from .context import get_context, get_queue
 class CLBuffer:
     """Wrapper around a pyopencl.Buffer with metadata."""
 
-    __slots__ = ("buffer", "nbytes", "dtype", "shape", "_id")
+    __slots__ = ("buffer", "nbytes", "dtype", "shape", "_id", "__weakref__")
 
     _counter = 0
     _lock = threading.Lock()
@@ -56,7 +57,7 @@ class CLBufferPool:
 
     def __init__(self) -> None:
         self._pool: dict[int, list[cl.Buffer]] = defaultdict(list)
-        self._active: dict[int, CLBuffer] = {}  # id → CLBuffer
+        self._active = weakref.WeakValueDictionary()
         self._lock = threading.Lock()
         self._stats = {
             "alloc_count": 0,
