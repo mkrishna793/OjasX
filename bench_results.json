@@ -7,81 +7,81 @@
   "results": [
     {
       "name": "add (1M elem)",
-      "cpu_ms": 0.6123500061221421,
-      "ocl_ms": 0.9489500080235302,
-      "speedup": 1.5496856349083605,
+      "cpu_ms": 0.6336999795166776,
+      "ocl_ms": 1.0173500049859285,
+      "speedup": 1.6054127155911548,
       "iterations": 50,
       "notes": "includes H2D + D2H for OCL if used standalone"
     },
     {
       "name": "mul (1M elem)",
-      "cpu_ms": 0.6806000019423664,
-      "ocl_ms": 0.8298499888041988,
-      "speedup": 1.2192917814221091,
+      "cpu_ms": 0.5396500055212528,
+      "ocl_ms": 0.8329500124091282,
+      "speedup": 1.5435004241398542,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "relu (1M elem)",
-      "cpu_ms": 0.40099999750964344,
-      "ocl_ms": 0.838350024423562,
-      "speedup": 2.0906484529426983,
+      "cpu_ms": 0.1370999962091446,
+      "ocl_ms": 0.5059500108473003,
+      "speedup": 3.6903721724067657,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "matmul 512x512 @ 512x512",
-      "cpu_ms": 4.1595500078983605,
-      "ocl_ms": 4.314100006013177,
-      "speedup": 1.0371554610045197,
+      "cpu_ms": 1.436150007066317,
+      "ocl_ms": 3.9928499900270253,
+      "speedup": 2.780245775428004,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "softmax (256x1024)",
-      "cpu_ms": 0.3783000138355419,
-      "ocl_ms": 1.7655499832471833,
-      "speedup": 4.6670629623997835,
+      "cpu_ms": 0.2786999975796789,
+      "ocl_ms": 1.5917499986244366,
+      "speedup": 5.711338401319374,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "layer_norm (256x1024)",
-      "cpu_ms": 0.18600000475998968,
-      "ocl_ms": 2.442149998387322,
-      "speedup": 13.129838364996917,
+      "cpu_ms": 0.05709999823011458,
+      "ocl_ms": 1.5468500059796497,
+      "speedup": 27.09019358889997,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "MLP fwd 784\u2192256\u2192128\u219210 (b=32)",
-      "cpu_ms": 0.6053999968571588,
-      "ocl_ms": 8.184199992683716,
-      "speedup": 13.518665403321332,
+      "cpu_ms": 0.1421999913873151,
+      "ocl_ms": 4.781399999046698,
+      "speedup": 33.62447460368286,
       "iterations": 50,
       "notes": "raw GPU compute, no tensor movement amortization"
     },
     {
       "name": "CKT evolve 0\u21922.0 (n=4096, 20 steps)",
       "cpu_ms": 0.0,
-      "ocl_ms": 4.334199998993427,
+      "ocl_ms": 3.8591000047745183,
       "speedup": null,
       "iterations": 50,
       "notes": "OjasX-exclusive feature (stateful ODE integration)"
     },
     {
       "name": "LiquidTensor.append (16x64x8) vs torch.cat",
-      "cpu_ms": 0.23475001216866076,
-      "ocl_ms": 3.6999000003561378,
-      "speedup": 15.761021548735307,
+      "cpu_ms": 0.23365000379271805,
+      "ocl_ms": 3.812999988440424,
+      "speedup": 16.319280661442303,
       "iterations": 50,
       "notes": "OCL ring-buffer write; CPU reallocates 16 times"
     },
     {
       "name": "FP32\u2192FP16 packing (n=1048576)",
-      "cpu_ms": 11.86549999692943,
-      "ocl_ms": 1.0537500056670979,
-      "speedup": 0.08880788891658917,
+      "cpu_ms": 12.97895000607241,
+      "ocl_ms": 1.5759499947307631,
+      "speedup": 0.12142353533940956,
       "iterations": 50,
       "notes": "OCL kernel vs numpy copy+cast"
     }
@@ -91,8 +91,8 @@
     "comparable_to_cpu": 9,
     "ocx_wins": 1,
     "cpu_wins": 8,
-    "median_speedup": 2.0906484529426983,
-    "best_speedup": 0.08880788891658917,
-    "worst_speedup": 15.761021548735307
+    "median_speedup": 3.6903721724067657,
+    "best_speedup": 0.12142353533940956,
+    "worst_speedup": 33.62447460368286
   }
 }
