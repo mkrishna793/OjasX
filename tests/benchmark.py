@@ -273,7 +273,6 @@ def bench_training_step(iters: int) -> BenchResult:
         targets = one_hot(labels)
 
         x = torchcl.to_opencl(images)
-        t = torchcl.to_opencl(targets)
 
         # Forward on GPU
         h1_out = relu1(lin1(x))
@@ -283,32 +282,33 @@ def bench_training_step(iters: int) -> BenchResult:
 
         # Backward + update on CPU (V0.2 limitation)
         probs_cpu = torchcl.to_cpu(probs)
-        targets_cpu = torchcl.to_cpu(t)
+        targets_cpu = targets.numpy()
         h1_cpu = torchcl.to_cpu(h1_out)
         h2_cpu = torchcl.to_cpu(h2_out)
 
+        # Linear layers store weights as [out, in], so W3 is [10, 128]
         # grad_W3 = h2.T @ (probs - targets) / batch  -> [128, 10]
         grad_out = (probs_cpu - targets_cpu) / batch
         grad_w3 = h2_cpu.T @ grad_out
-        # grad_h2 = grad_out @ W3.T  -> [64, 128]
+        # grad_h2 = grad_out @ W3  (W3 is [10, 128], not transposed)  -> [64, 128]
         w3_cpu = torchcl.to_cpu(lin3._weight_gpu)
-        grad_h2 = grad_out @ w3_cpu.T
+        grad_h2 = grad_out @ w3_cpu
         grad_h2 = grad_h2 * (h2_cpu > 0).float()
         # grad_W2 = h1.T @ grad_h2  -> [256, 128]
         grad_w2 = h1_cpu.T @ grad_h2
-        # grad_h1 = grad_h2 @ W2.T  -> [64, 256]
+        # grad_h1 = grad_h2 @ W2  -> [64, 256]
         w2_cpu = torchcl.to_cpu(lin2._weight_gpu)
-        grad_h1 = grad_h2 @ w2_cpu.T
+        grad_h1 = grad_h2 @ w2_cpu
         grad_h1 = grad_h1 * (h1_cpu > 0).float()
         # grad_W1 = images.T @ grad_h1  -> [784, 256]
+        # (then we want it in the layout of weight, which is [out, in] = [256, 784]
+        # so we transpose at the end)
         grad_w1 = images.T @ grad_h1
 
         with torch.no_grad():
-            lin1.weight.data -= lr * grad_w1
-            lin2.weight.data -= lr * grad_w2
-            lin3.weight.data -= lr * grad_w3
-
-        return loss.detach() if hasattr(loss, "detach") else loss
+            lin1.weight.data -= lr * grad_w1.T
+            lin2.weight.data -= lr * grad_w2.T
+            lin3.weight.data -= lr * grad_w3.T
 
     def cpu_step():
         images, labels = gen_synthetic_batch(batch)

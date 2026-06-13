@@ -1,0 +1,200 @@
+"""
+OjasX V3 — Native Tensor Subclass and PyTorch Integration
+Hooks into PyTorch's __torch_dispatch__ and monkeypatches nn.Linear
+to provide a seamless 'device="opencl"' native interface.
+"""
+
+import torch
+import torchcl
+import numpy as np
+
+# ── ATen Op Dispatcher ────────────────────────────────────────────────
+
+# Mapping from PyTorch ATen ops to torchcl functions
+DISPATCH_TABLE = {
+    torch.ops.aten.add.Tensor: torchcl.add,
+    torch.ops.aten.sub.Tensor: torchcl.sub,
+    torch.ops.aten.mul.Tensor: torchcl.mul,
+    torch.ops.aten.div.Tensor: torchcl.div,
+    torch.ops.aten.neg.default: torchcl.neg,
+    torch.ops.aten.abs.default: torchcl.abs_,
+    torch.ops.aten.exp.default: torchcl.exp,
+    torch.ops.aten.log.default: torchcl.log,
+    torch.ops.aten.sqrt.default: torchcl.sqrt,
+    torch.ops.aten.relu.default: torchcl.relu,
+    torch.ops.aten.sigmoid.default: torchcl.sigmoid,
+    torch.ops.aten.tanh.default: torchcl.tanh_,
+    torch.ops.aten.gelu.default: torchcl.gelu,
+    torch.ops.aten.silu.default: torchcl.silu,
+    torch.ops.aten.mm.default: torchcl.matmul,
+}
+
+def execute_on_cpu(func, *args, **kwargs):
+    """Seamless CPU fallback: moves tensors to CPU, runs PyTorch native, moves back."""
+    def unwrap_to_cpu(x):
+        if isinstance(x, OjasXTensor):
+            return torchcl.to_cpu(x._elem)
+        return x
+        
+    cpu_args = torch.utils._pytree.tree_map(unwrap_to_cpu, args)
+    cpu_kwargs = torch.utils._pytree.tree_map(unwrap_to_cpu, kwargs)
+    
+    res = func(*cpu_args, **cpu_kwargs)
+    
+    def wrap_to_opencl(x):
+        if isinstance(x, torch.Tensor):
+            return OjasXTensor(torchcl.to_opencl(x.contiguous()))
+        return x
+        
+    return torch.utils._pytree.tree_map(wrap_to_opencl, res)
+
+def dispatch_op(func, *args, **kwargs):
+    """Routes the ATen operation to OpenCL or falls back to CPU."""
+    if func in DISPATCH_TABLE:
+        try:
+            def unwrap(x):
+                return x._elem if isinstance(x, OjasXTensor) else x
+            
+            ocl_args = torch.utils._pytree.tree_map(unwrap, args)
+            ocl_kwargs = torch.utils._pytree.tree_map(unwrap, kwargs)
+            
+            res = DISPATCH_TABLE[func](*ocl_args, **ocl_kwargs)
+            
+            def wrap(x):
+                return OjasXTensor(x) if isinstance(x, torch.Tensor) else x
+            return torch.utils._pytree.tree_map(wrap, res)
+        except Exception as e:
+            return execute_on_cpu(func, *args, **kwargs)
+            
+    return execute_on_cpu(func, *args, **kwargs)
+
+
+# ── Wrapper Tensor Subclass ───────────────────────────────────────────
+
+class OjasXTensor(torch.Tensor):
+    """A PyTorch Tensor subclass that intercepts all operations."""
+    @staticmethod
+    def __new__(cls, elem):
+        real_size = getattr(elem, "_torchcl_shape", elem.size())
+        dummy = torch.empty(real_size)
+        real_strides = dummy.stride()
+        
+        r = torch.Tensor._make_wrapper_subclass(
+            cls, 
+            size=real_size, 
+            strides=real_strides, 
+            storage_offset=0,
+            dtype=elem.dtype, 
+            layout=elem.layout, 
+            device=torch.device("cpu"), 
+            requires_grad=elem.requires_grad
+        )
+        r._elem = elem
+        return r
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        return dispatch_op(func, *args, **kwargs)
+
+    @property
+    def device(self):
+        class FakeDevice:
+            def __init__(self):
+                self.type = 'opencl'
+            def __str__(self):
+                return "opencl"
+            def __repr__(self):
+                return "device(type='opencl')"
+            def __eq__(self, other):
+                return str(other) == 'opencl' or (hasattr(other, 'type') and other.type == 'opencl')
+        return FakeDevice()
+
+    def __repr__(self):
+        return f"OjasXTensor({self._elem}, device='opencl')"
+
+
+# ── Monkeypatches for PyTorch ──────────────────────────────────────────
+
+_original_tensor_to = torch.Tensor.to
+_original_module_to = torch.nn.Module.to
+_original_linear_forward = torch.nn.Linear.forward
+
+def _custom_tensor_to(self, *args, **kwargs):
+    """Intercepts tensor.to('opencl')"""
+    target_device = None
+    if len(args) > 0 and isinstance(args[0], str):
+        target_device = args[0]
+    elif kwargs.get("device") is not None:
+        target_device = str(kwargs.get("device"))
+        
+    if target_device == "opencl" or target_device == "device(type='opencl')":
+        if isinstance(self, OjasXTensor):
+            return self
+        if torchcl.is_opencl_tensor(self):
+            return OjasXTensor(self)
+        ocl_tensor = torchcl.to_opencl(self)
+        return OjasXTensor(ocl_tensor)
+        
+    if (target_device == "cpu" or target_device == "device(type='cpu')") and isinstance(self, OjasXTensor):
+        return torchcl.to_cpu(self._elem)
+        
+    return _original_tensor_to(self, *args, **kwargs)
+
+def _custom_module_to(self, *args, **kwargs):
+    """Intercepts model.to('opencl')"""
+    target_device = None
+    if len(args) > 0 and isinstance(args[0], str):
+        target_device = args[0]
+    elif kwargs.get("device") is not None:
+        target_device = str(kwargs.get("device"))
+        
+    if target_device == "opencl" or target_device == "device(type='opencl')":
+        def _convert(t):
+            if isinstance(t, OjasXTensor):
+                return t
+            return OjasXTensor(torchcl.to_opencl(t.contiguous()))
+            
+        for name, param in self.named_parameters(recurse=False):
+            if param is not None:
+                new_param = torch.nn.Parameter(_convert(param.data), requires_grad=param.requires_grad)
+                self.register_parameter(name, new_param)
+                
+        for name, buf in self.named_buffers(recurse=False):
+            if buf is not None:
+                self.register_buffer(name, _convert(buf.data))
+                
+        for child in self.children():
+            child.to("opencl")
+            
+        return self
+        
+    return _original_module_to(self, *args, **kwargs)
+
+def _custom_linear_forward(self, input: torch.Tensor) -> torch.Tensor:
+    """Intercepts Linear forward to avoid ATen addmm, routing through mm + add."""
+    is_opencl = False
+    if isinstance(input, OjasXTensor):
+        is_opencl = True
+    elif input.device.type in ("opencl", "privateuseone"):
+        is_opencl = True
+    elif getattr(input, "device", None) == "opencl":
+        is_opencl = True
+
+    if is_opencl:
+        # Route through mm and add
+        wt = torch.ops.aten.t.default(self.weight)
+        out = torch.ops.aten.mm.default(input, wt)
+        if self.bias is not None:
+            # Broadcast/tile bias vector to match out shape [batch_size, out_features]
+            bias_tiled = self.bias.unsqueeze(0).expand(out.shape[0], -1).contiguous()
+            out = torch.ops.aten.add.Tensor(out, bias_tiled)
+        return out
+        
+    return _original_linear_forward(self, input)
+
+def apply_monkeypatches():
+    """Applies the patches. Called automatically in __init__.py"""
+    torch.Tensor.to = _custom_tensor_to
+    torch.nn.Module.to = _custom_module_to
+    torch.nn.Linear.forward = _custom_linear_forward

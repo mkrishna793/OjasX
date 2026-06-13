@@ -7,92 +7,100 @@
   "results": [
     {
       "name": "add (1M elem)",
-      "cpu_ms": 0.6336999795166776,
-      "ocl_ms": 1.0173500049859285,
-      "speedup": 1.6054127155911548,
+      "cpu_ms": 0.8203500037780032,
+      "ocl_ms": 0.9865999891189858,
+      "speedup": 1.202657383525742,
       "iterations": 50,
       "notes": "includes H2D + D2H for OCL if used standalone"
     },
     {
       "name": "mul (1M elem)",
-      "cpu_ms": 0.5396500055212528,
-      "ocl_ms": 0.8329500124091282,
-      "speedup": 1.5435004241398542,
+      "cpu_ms": 0.7039000047370791,
+      "ocl_ms": 0.8686999935889617,
+      "speedup": 1.2341241479511549,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "relu (1M elem)",
-      "cpu_ms": 0.1370999962091446,
-      "ocl_ms": 0.5059500108473003,
-      "speedup": 3.6903721724067657,
+      "cpu_ms": 0.440200004959479,
+      "ocl_ms": 0.6537500012200326,
+      "speedup": 1.4851203858578128,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "matmul 512x512 @ 512x512",
-      "cpu_ms": 1.436150007066317,
-      "ocl_ms": 3.9928499900270253,
-      "speedup": 2.780245775428004,
+      "cpu_ms": 4.503550007939339,
+      "ocl_ms": 4.134100003284402,
+      "speedup": 0.9179647158344794,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "softmax (256x1024)",
-      "cpu_ms": 0.2786999975796789,
-      "ocl_ms": 1.5917499986244366,
-      "speedup": 5.711338401319374,
+      "cpu_ms": 0.5723999929614365,
+      "ocl_ms": 1.9375999982003123,
+      "speedup": 3.3850454612616523,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "layer_norm (256x1024)",
-      "cpu_ms": 0.05709999823011458,
-      "ocl_ms": 1.5468500059796497,
-      "speedup": 27.09019358889997,
+      "cpu_ms": 0.16799999866634607,
+      "ocl_ms": 2.1868000039830804,
+      "speedup": 13.016666793707197,
       "iterations": 50,
       "notes": ""
     },
     {
       "name": "MLP fwd 784\u2192256\u2192128\u219210 (b=32)",
-      "cpu_ms": 0.1421999913873151,
-      "ocl_ms": 4.781399999046698,
-      "speedup": 33.62447460368286,
+      "cpu_ms": 0.6888000061735511,
+      "ocl_ms": 8.284049996291287,
+      "speedup": 12.026785601108177,
       "iterations": 50,
       "notes": "raw GPU compute, no tensor movement amortization"
     },
     {
+      "name": "Train step MLP 784\u2192256\u2192128\u219210 (b=64)",
+      "cpu_ms": 22.08039999823086,
+      "ocl_ms": 29.907249991083518,
+      "speedup": 1.3544704803119403,
+      "iterations": 16,
+      "notes": "OCL fwd on GPU, bwd+update on CPU (V0.2); CPU uses full torch.autograd"
+    },
+    {
       "name": "CKT evolve 0\u21922.0 (n=4096, 20 steps)",
       "cpu_ms": 0.0,
-      "ocl_ms": 3.8591000047745183,
+      "ocl_ms": 4.017650004243478,
       "speedup": null,
       "iterations": 50,
       "notes": "OjasX-exclusive feature (stateful ODE integration)"
     },
     {
       "name": "LiquidTensor.append (16x64x8) vs torch.cat",
-      "cpu_ms": 0.23365000379271805,
-      "ocl_ms": 3.812999988440424,
-      "speedup": 16.319280661442303,
+      "cpu_ms": 0.238649983657524,
+      "ocl_ms": 3.3314499887637794,
+      "speedup": 13.95956512423062,
       "iterations": 50,
       "notes": "OCL ring-buffer write; CPU reallocates 16 times"
     },
     {
       "name": "FP32\u2192FP16 packing (n=1048576)",
-      "cpu_ms": 12.97895000607241,
-      "ocl_ms": 1.5759499947307631,
-      "speedup": 0.12142353533940956,
+      "cpu_ms": 3.320249990792945,
+      "ocl_ms": 0.7358999864663929,
+      "speedup": 0.2216399332902775,
       "iterations": 50,
       "notes": "OCL kernel vs numpy copy+cast"
     }
   ],
   "summary": {
-    "total_benchmarks": 10,
-    "comparable_to_cpu": 9,
-    "ocx_wins": 1,
+    "total_benchmarks": 11,
+    "comparable_to_cpu": 10,
+    "ocx_wins": 2,
     "cpu_wins": 8,
-    "median_speedup": 3.6903721724067657,
-    "best_speedup": 0.12142353533940956,
-    "worst_speedup": 33.62447460368286
+    "median_speedup": 1.4197954330848765,
+    "best_speedup": 0.2216399332902775,
+    "worst_speedup": 13.95956512423062
   }
 }

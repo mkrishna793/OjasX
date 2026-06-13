@@ -54,13 +54,97 @@ def _make_handle(shape: tuple, dtype: torch.dtype = torch.float32) -> tuple[torc
 
 def _get_buf(tensor: torch.Tensor) -> CLBuffer:
     """Get the OpenCL buffer for a TorchCL tensor handle."""
+    if hasattr(tensor, "_elem"):
+        return _get_buf(tensor._elem)
+    ptr = tensor.data_ptr()
+    if ptr in _opencl_buffers:
+        return _opencl_buffers[ptr]
     tid = getattr(tensor, "_torchcl_id", None)
-    if tid is None or tid not in _opencl_buffers:
+    if tid is None:
         raise ValueError(
             "This tensor is not on the OpenCL device. "
             "Use torchcl.to_opencl(tensor) first."
         )
+    if tid not in _opencl_buffers:
+        if _is_lazy(tensor):
+            materialize_lazy_tensor(tensor)
+        else:
+            raise ValueError(
+                "This tensor is not on the OpenCL device. "
+                "Use torchcl.to_opencl(tensor) first."
+            )
     return _opencl_buffers[tid]
+
+
+def _is_lazy(tensor: torch.Tensor) -> bool:
+    return getattr(tensor, "_lazy_inputs", None) is not None
+
+
+def _create_lazy_unary(op_name: str, a: torch.Tensor) -> torch.Tensor:
+    shape = _get_shape(a)
+    dtype = _get_dtype(a)
+    handle, tid = _make_handle(shape, dtype)
+    
+    if _is_lazy(a):
+        handle._lazy_inputs = a._lazy_inputs
+        handle._lazy_op_type = a._lazy_op_type
+        if hasattr(a, "_lazy_binary_op"):
+            handle._lazy_binary_op = a._lazy_binary_op
+        handle._lazy_ops = list(a._lazy_ops) + [op_name]
+    else:
+        handle._lazy_inputs = [a]
+        handle._lazy_op_type = "unary"
+        handle._lazy_ops = [op_name]
+        
+    return handle
+
+
+def _create_lazy_binary(op_name: str, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    if _is_lazy(a):
+        materialize_lazy_tensor(a)
+    if _is_lazy(b):
+        materialize_lazy_tensor(b)
+        
+    shape = _get_shape(a)
+    dtype = _get_dtype(a)
+    handle, tid = _make_handle(shape, dtype)
+    
+    handle._lazy_inputs = [a, b]
+    handle._lazy_op_type = "binary_then_unary"
+    handle._lazy_binary_op = op_name
+    handle._lazy_ops = []
+    
+    return handle
+
+
+def materialize_lazy_tensor(tensor: torch.Tensor) -> None:
+    if tensor._torchcl_id in _opencl_buffers:
+        return
+
+    inputs = tensor._lazy_inputs
+    for inp in inputs:
+        if _is_lazy(inp):
+            materialize_lazy_tensor(inp)
+
+    engine = get_engine()
+    shape = tensor._torchcl_shape
+    dtype = tensor._torchcl_dtype
+    out_buf = engine.allocate_output(shape, dtype)
+
+    from torchcl.jit.compiler import get_jit_compiler
+    jit = get_jit_compiler()
+    n = int(np.prod(shape))
+
+    if tensor._lazy_op_type == "unary":
+        in_buf = _opencl_buffers[inputs[0]._torchcl_id].buffer
+        jit.fuse_elementwise_chain(tensor._lazy_ops, n, [in_buf], out_buf.buffer)
+    elif tensor._lazy_op_type == "binary_then_unary":
+        a_buf = _opencl_buffers[inputs[0]._torchcl_id].buffer
+        b_buf = _opencl_buffers[inputs[1]._torchcl_id].buffer
+        jit.fuse_binary_then_unary(tensor._lazy_binary_op, tensor._lazy_ops, n, a_buf, b_buf, out_buf.buffer)
+
+    _opencl_buffers[tensor._torchcl_id] = out_buf
+    weakref.finalize(tensor, _cleanup_buffer, out_buf)
 
 
 def _get_shape(tensor: torch.Tensor) -> tuple:
@@ -81,8 +165,14 @@ def _wrap_output(cl_buf: CLBuffer, shape: tuple, dtype: torch.dtype = torch.floa
 
 def is_opencl_tensor(tensor: torch.Tensor) -> bool:
     """Check if a tensor is stored on OpenCL."""
+    if hasattr(tensor, "_elem"):
+        return is_opencl_tensor(tensor._elem)
+    if getattr(tensor, "device", None) is not None and tensor.device.type in ("opencl", "privateuseone"):
+        return True
+    if tensor.data_ptr() in _opencl_buffers:
+        return True
     tid = getattr(tensor, "_torchcl_id", None)
-    return tid is not None and tid in _opencl_buffers
+    return tid is not None and (tid in _opencl_buffers or _is_lazy(tensor))
 
 
 # ── Data movement ────────────────────────────────────────────────────
@@ -99,6 +189,8 @@ def to_opencl(tensor: torch.Tensor) -> torch.Tensor:
 
 def to_cpu(tensor: torch.Tensor) -> torch.Tensor:
     """Move an OpenCL tensor back to CPU."""
+    if hasattr(tensor, "_elem"):
+        return to_cpu(tensor._elem)
     if not is_opencl_tensor(tensor):
         return tensor
 
@@ -160,144 +252,102 @@ def randn(*shape, dtype: torch.dtype = torch.float32) -> torch.Tensor:
 
 def add(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise addition on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_binary("add_f32", _get_buf(a), _get_buf(b), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a) or not is_opencl_tensor(b):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_binary("add", a, b)
 
 
 def sub(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise subtraction on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_binary("sub_f32", _get_buf(a), _get_buf(b), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a) or not is_opencl_tensor(b):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_binary("sub", a, b)
 
 
 def mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise multiplication on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_binary("mul_f32", _get_buf(a), _get_buf(b), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a) or not is_opencl_tensor(b):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_binary("mul", a, b)
 
 
 def div(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise division on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_binary("div_f32", _get_buf(a), _get_buf(b), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a) or not is_opencl_tensor(b):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_binary("div", a, b)
 
 
 def neg(a: torch.Tensor) -> torch.Tensor:
     """Element-wise negation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_unary("neg_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("neg", a)
 
 
 def abs_(a: torch.Tensor) -> torch.Tensor:
     """Element-wise absolute value on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_unary("abs_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("abs", a)
 
 
 def exp(a: torch.Tensor) -> torch.Tensor:
     """Element-wise exp on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_unary("exp_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("exp", a)
 
 
 def log(a: torch.Tensor) -> torch.Tensor:
     """Element-wise log on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_unary("log_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("log", a)
 
 
 def sqrt(a: torch.Tensor) -> torch.Tensor:
     """Element-wise sqrt on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_elementwise_unary("sqrt_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("sqrt", a)
 
 
 # ── Activation functions ─────────────────────────────────────────────
 
 def relu(a: torch.Tensor) -> torch.Tensor:
     """ReLU activation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_activation("relu_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("relu", a)
 
 
 def sigmoid(a: torch.Tensor) -> torch.Tensor:
     """Sigmoid activation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_activation("sigmoid_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("sigmoid", a)
 
 
 def tanh_(a: torch.Tensor) -> torch.Tensor:
     """Tanh activation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_activation("tanh_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("tanh", a)
 
 
 def gelu(a: torch.Tensor) -> torch.Tensor:
     """GELU activation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_activation("gelu_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("gelu", a)
 
 
 def silu(a: torch.Tensor) -> torch.Tensor:
     """SiLU activation on OpenCL."""
-    engine = get_engine()
-    shape = _get_shape(a)
-    n = int(np.prod(shape))
-    out_buf = engine.allocate_output(shape)
-    engine.run_activation("silu_f32", _get_buf(a), out_buf, n)
-    return _wrap_output(out_buf, shape)
+    if not is_opencl_tensor(a):
+        raise ValueError("This tensor is not on the OpenCL device. Use torchcl.to_opencl(tensor) first.")
+    return _create_lazy_unary("silu", a)
 
 
 def leaky_relu(a: torch.Tensor, negative_slope: float = 0.01) -> torch.Tensor:
