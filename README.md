@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="assets/hero.png" alt="OjasX — The Vital Energy of Universal AI Compute" width="700"/>
-</p>
 
 <h1 align="center">⚡ O J A S X</h1>
 
@@ -71,25 +68,25 @@ OjasX is built as a layered engine. Each layer has a single responsibility:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    YOUR PYTHON CODE                      │
+│                    YOUR PYTHON CODE                     │
 │              x = torchcl.matmul(a, b)                   │
 ├─────────────────────────────────────────────────────────┤
-│                    PUBLIC API (api.py)                    │
+│                    PUBLIC API (api.py)                  │
 │         40+ operations: add, matmul, relu, softmax...   │
 ├─────────────────────────────────────────────────────────┤
-│                 COMPUTE ENGINE (engine.py)                │
-│       Converts PyTorch tensors ↔ OpenCL GPU buffers      │
-│              Launches kernels with optimal sizing         │
+│                 COMPUTE ENGINE (engine.py)              │
+│       Converts PyTorch tensors ↔ OpenCL GPU buffers     │
+│              Launches kernels with optimal sizing       │
 ├──────────────────────┬──────────────────────────────────┤
-│   JIT COMPILER       │      KERNEL REGISTRY              │
-│  Fuses multiple ops  │   Loads & caches compiled         │
-│  into single kernels │   .cl kernel programs             │
+│   JIT COMPILER       │      KERNEL REGISTRY             │
+│  Fuses multiple ops  │   Loads & caches compiled        │
+│  into single kernels │   .cl kernel programs            │
 ├──────────────────────┴──────────────────────────────────┤
-│              OPENCL RUNTIME (context.py + memory.py)      │
-│    Platform discovery │ Buffer pool │ CPU↔GPU transfers   │
+│              OPENCL RUNTIME (context.py + memory.py)    │
+│    Platform discovery │ Buffer pool │ CPU↔GPU transfers │
 ├─────────────────────────────────────────────────────────┤
-│                   ANY OPENCL DEVICE                       │
-│        AMD │ Intel │ Qualcomm │ ARM │ NVIDIA │ FPGA      │
+│                   ANY OPENCL DEVICE                     │
+│        AMD │ Intel │ Qualcomm │ ARM │ NVIDIA │ FPGA     │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -240,6 +237,23 @@ Today, 3 billion people own devices with GPUs that can run AI. But only those wi
 - 🔬 **Researchers** can run experiments on whatever hardware their lab has
 - 🌐 **Governments** can build sovereign AI infrastructure without vendor lock-in
 - 🤖 **Edge devices** with ARM/Qualcomm chips can run local AI
+  
+  ### 🌱 For the Earth ###
+
+AI has an energy crisis no one talks about. A single NVIDIA A100 GPU consumes **400 watts** — training one large model can emit as much CO₂ as **five cars in their entire lifetime**.
+
+But here's what they don't tell you: most of that energy is wasted on hardware that was designed to render video game pixels, not multiply matrices. Meanwhile, chips built for efficiency already exist:
+
+- **ARM Mali GPUs** consume **2-5 watts** — running in billions of phones worldwide
+- **Intel Iris Xe** uses **15-25 watts** — already in your laptop
+- **Qualcomm Adreno** draws **3-8 watts** — powers every Android flagship
+
+These chips aren't as fast as a $40,000 NVIDIA H100. But they don't need to be. Not every AI task requires a nuclear reactor. A student training a model, a doctor running diagnostics, a farmer using crop analysis — they need **good enough** AI that runs on hardware that **doesn't burn the planet**.
+
+OjasX makes this possible. By unlocking AI on energy-efficient silicon, we're not just breaking a monopoly — **we're reducing the carbon cost of intelligence itself**.
+
+> *"The greenest GPU is the one already in your pocket."*
+
 
 ### The Roadmap
 
@@ -250,7 +264,6 @@ Today, 3 billion people own devices with GPUs that can run AI. But only those wi
 | **V3** | `device="opencl"` syntax via PrivateUse1 C++ integration |
 | **V4** | Performance parity with CUDA on equivalent hardware |
 | **V5** | torch.compile full graph execution, multi-GPU support |
-| **V∞** | Ecosystem: Hugging Face integration, ONNX export, mobile SDK |
 
 ---
 
@@ -286,8 +299,7 @@ The AGPL specifically closes the "cloud loophole" that exists in the regular GPL
 
 #### 💼 Commercial Licensing (Dual License)
 
-If your company wants to use OjasX **without** open-sourcing your proprietary code, a **commercial license** is available. Contact: [mkrishna.16july@gmail.com](mailto:mkrishna.16july@gmail.com)
-
+If your company wants to use OjasX **without** open-sourcing your proprietary code, a **commercial license** is available. Contact: [mkrishna.16july@gmail.com](mailto:mkrishna.16july@gmail.com) and [mohanakrishnanannuru@gmail.com]
 This dual-licensing model ensures:
 1. **The technology stays free** for individuals and the open-source community
 2. **Corporations must contribute back** if they use the free version
@@ -375,12 +387,3 @@ python tests/test_jit.py
 Created by **mkrishna793** — with the conviction that AI compute is a human right, not a corporate privilege.
 
 ---
-
-<p align="center">
-  <br/>
-  <strong>⚡ The energy belongs to everyone. ⚡</strong>
-  <br/><br/>
-  <em>Built with the vision that no corporation should control who gets to build AI.</em>
-  <br/><br/>
-  <sub>OjasX V1.0.0 — April 2026</sub>
-</p>
